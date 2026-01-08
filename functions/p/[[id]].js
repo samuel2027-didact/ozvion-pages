@@ -1,6 +1,4 @@
 // functions/p/[[id]].js
-// Cloudflare Pages Function (Worker runtime)
-// Doel: share page / OG + Parler/Instagram-achtige layout met App Banner + Community + User header
 
 export async function onRequest(context) {
   const { params, env, request } = context;
@@ -15,7 +13,11 @@ export async function onRequest(context) {
   if (!serviceRoleKey) return text("Missing SUPABASE_SERVICE_ROLE_KEY env var", 500);
 
   // ---------- Site/App config ----------
+  // siteUrl = host van je share pages / assets (ozvion.app)
   const siteUrl = String(env.SITE_URL || "https://ozvion.app").replace(/\/$/, "");
+  // webUrl = je marketing/website domein waar “Website” knoppen naartoe moeten (ozvion.com)
+  const webUrl = String(env.WEB_URL || "https://ozvion.com").replace(/\/$/, "");
+
   const appScheme = String(env.APP_SCHEME || "ozvion"); // ozvion://
   const appName = String(env.APP_NAME || "Ozvion");
 
@@ -40,7 +42,6 @@ export async function onRequest(context) {
   if (!post) return text("Post not found in DB", 404);
 
   // ---------- Fetch Profile + Community ----------
-  // BELANGRIJK: dit zijn de echte kolommen uit jouw Supabase screenshots.
   const profile = post.user_id
     ? await fetchOne({
         supabaseUrl,
@@ -146,7 +147,6 @@ export async function onRequest(context) {
     a{ color:inherit; }
     .wrap{ max-width: 920px; margin: 0 auto; padding: 14px 14px 44px; }
 
-    /* App banner (Smart Banner-ish / Parler-ish) */
     .appBanner{
       position: sticky;
       top: 0;
@@ -190,7 +190,6 @@ export async function onRequest(context) {
       cursor:pointer; font-weight:900;
     }
 
-    /* Card */
     .card{
       margin-top: 14px;
       background: linear-gradient(180deg, rgba(18,24,38,.96), rgba(15,21,34,.96));
@@ -200,7 +199,6 @@ export async function onRequest(context) {
       box-shadow: var(--shadow);
     }
 
-    /* Community banner bar (optioneel mooi extra) */
     .communityBar{
       display:flex; align-items:center; justify-content:space-between; gap:10px;
       padding: 12px 16px;
@@ -218,7 +216,6 @@ export async function onRequest(context) {
     .communityHandle{ margin:0; font-size: 12px; color: rgba(159,176,208,.78);
       white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width: 55vw; }
 
-    /* Media */
     .hero{
       background:#000;
       aspect-ratio: 16/9;
@@ -232,7 +229,6 @@ export async function onRequest(context) {
       display:block;
     }
 
-    /* Meta */
     .meta{ padding: 16px 16px 12px; }
     .headerRow{
       display:flex; align-items:flex-start; gap:12px; justify-content:space-between;
@@ -317,7 +313,9 @@ export async function onRequest(context) {
             <p class="communityHandle">${escapeHtml(communityHandle || "Community")}</p>
           </div>
         </a>
-        <a class="btn ghost" href="${escapeHtml(siteUrl)}" rel="noopener">Website</a>
+
+        <!-- ✅ Website button moet naar ozvion.com -->
+        <a class="btn ghost" href="${escapeHtml(webUrl)}" rel="noopener">Website</a>
       </div>
 
       ${renderHero(hero.type, hero.url, hero.poster || `${siteUrl}/og-default.png`)}
@@ -352,8 +350,12 @@ export async function onRequest(context) {
       <div class="actions">
         <a class="btn primary" href="${escapeHtml(deepLink)}" rel="noopener">Open in app</a>
         ${storeUrl ? `<a class="btn ghost" href="${escapeHtml(storeUrl)}" rel="noopener">Get the app</a>` : ""}
-        <a class="btn ghost" href="${escapeHtml(siteUrl)}" rel="noopener">Open Ozvion website</a>
-        <a class="btn danger" href="${escapeHtml(siteUrl + "/login")}" rel="noopener">Login / Sign up</a>
+
+        <!-- ✅ Open Ozvion website moet naar ozvion.com -->
+        <a class="btn ghost" href="${escapeHtml(webUrl)}" rel="noopener">Open Ozvion website</a>
+
+        <!-- (optioneel) login ook op web domein -->
+        <a class="btn danger" href="${escapeHtml(webUrl + "/login")}" rel="noopener">Login / Sign up</a>
       </div>
     </div>
 
@@ -361,7 +363,6 @@ export async function onRequest(context) {
   </div>
 
   <script>
-    // Hide banner when user closes it (session only)
     (function(){
       const banner = document.getElementById('appBanner');
       const closeBtn = document.getElementById('bannerClose');
@@ -384,7 +385,6 @@ export async function onRequest(context) {
   return new Response(html, {
     headers: {
       "Content-Type": "text/html; charset=utf-8",
-      // OG kan wijzigen → korte cache
       "Cache-Control": "public, max-age=60",
     },
   });
@@ -404,7 +404,6 @@ async function fetchOne({ supabaseUrl, serviceRoleKey, table, filter, select }) 
   qp.set("select", select);
   qp.set("limit", "1");
 
-  // filter komt als "id=eq.xxx" → plakken we direct achter de ?
   const url = `${supabaseUrl}/rest/v1/${encodeURIComponent(table)}?${filter}&${qp.toString()}`;
 
   const res = await fetch(url, {
