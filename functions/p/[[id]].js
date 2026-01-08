@@ -1,4 +1,6 @@
 // functions/p/[[id]].js
+// Cloudflare Pages Function (Worker runtime)
+// Doel: share page / OG + Parler/Instagram-achtige layout met App Banner + Community + User header
 
 export async function onRequest(context) {
   const { params, env, request } = context;
@@ -20,8 +22,8 @@ export async function onRequest(context) {
   // Banner / Store links
   const appIconUrl = String(env.APP_ICON_URL || `${siteUrl}/app-icon.png`);
   const iosAppId = String(env.IOS_APP_ID || ""); // Smart Banner app-id (optioneel)
-  const iosStoreUrl = String(env.IOS_APP_STORE_URL || ""); // https://apps.apple.com/app/idXXXX
-  const androidStoreUrl = String(env.ANDROID_PLAY_STORE_URL || ""); // https://play.google.com/store/apps/details?id=...
+  const iosStoreUrl = String(env.IOS_APP_STORE_URL || "");
+  const androidStoreUrl = String(env.ANDROID_PLAY_STORE_URL || "");
 
   const pageUrl = new URL(request.url).toString();
   const deepLink = `${appScheme}://p/${encodeURIComponent(id)}`;
@@ -35,28 +37,27 @@ export async function onRequest(context) {
     select:
       "id,title,body,thumbnail_url,media_url,media_type,is_nsfw,is_spoiler,link_url,created_at,user_id,community_id",
   });
-
   if (!post) return text("Post not found in DB", 404);
 
-  // ---------- Fetch Profile + Community (best-effort) ----------
+  // ---------- Fetch Profile + Community ----------
+  // BELANGRIJK: dit zijn de echte kolommen uit jouw Supabase screenshots.
   const profile = post.user_id
-    ? await fetchOneSafe({
+    ? await fetchOne({
         supabaseUrl,
         serviceRoleKey,
         table: "profiles",
         filter: `id=eq.${post.user_id}`,
-        // jouw schema verschilt mogelijk, daarom meerdere mogelijke velden
-        select: "id,username,display_name,full_name,avatar_url,avatar",
+        select: "id,username,display_name,full_name,avatar_url",
       })
     : null;
 
   const community = post.community_id
-    ? await fetchOneSafe({
+    ? await fetchOne({
         supabaseUrl,
         serviceRoleKey,
         table: "communities",
         filter: `id=eq.${post.community_id}`,
-        select: "id,name,handle,icon_url,avatar_url,banner_url,description",
+        select: "id,name,handle,icon_url,banner_url,description",
       })
     : null;
 
@@ -67,23 +68,20 @@ export async function onRequest(context) {
   const hero = pickHero(post, siteUrl);
   const ogImage = hero.poster || `${siteUrl}/og-default.png`;
 
+  // user
   const username =
-    safeText(profile?.username) ||
     safeText(profile?.display_name) ||
+    safeText(profile?.username) ||
     safeText(profile?.full_name) ||
     "User";
 
-  const userAvatar =
-    pickFirstHttp(profile?.avatar_url) ||
-    pickFirstHttp(profile?.avatar) ||
-    `${siteUrl}/avatar-default.png`;
+  const userAvatar = pickFirstHttp(profile?.avatar_url) || `${siteUrl}/avatar-default.png`;
 
+  // community
   const communityName = safeText(community?.name) || "Ozvion";
-  const communityHandle = safeText(community?.handle) ? `@${safeText(community.handle)}` : "";
-  const communityIcon =
-    pickFirstHttp(community?.icon_url) ||
-    pickFirstHttp(community?.avatar_url) ||
-    `${siteUrl}/community-default.png`;
+  const communityHandle = safeText(community?.handle) || ""; // bij jou: "/tap"
+  const communityIcon = pickFirstHttp(community?.icon_url) || `${siteUrl}/community-default.png`;
+  const communityUrl = communityHandle ? `${siteUrl}${communityHandle}` : siteUrl;
 
   const createdAt = safeText(post.created_at);
   const timeAgoText = createdAt ? timeAgo(createdAt) : "";
@@ -116,7 +114,9 @@ export async function onRequest(context) {
 
   ${
     iosAppId
-      ? `<meta name="apple-itunes-app" content="app-id=${escapeHtml(iosAppId)}">`
+      ? `<meta name="apple-itunes-app" content="app-id=${escapeHtml(
+          iosAppId
+        )}, app-argument=${escapeHtml(deepLink)}">`
       : ""
   }
 
@@ -131,6 +131,7 @@ export async function onRequest(context) {
       --btn2:rgba(255,255,255,.08);
       --danger:#ff3b30;
       --radius:18px;
+      --shadow: 0 14px 40px rgba(0,0,0,.38);
     }
     *{ box-sizing:border-box; }
     body{
@@ -142,9 +143,10 @@ export async function onRequest(context) {
         var(--bg);
       color:var(--text);
     }
+    a{ color:inherit; }
     .wrap{ max-width: 920px; margin: 0 auto; padding: 14px 14px 44px; }
 
-    /* App banner (Parler-ish) */
+    /* App banner (Smart Banner-ish / Parler-ish) */
     .appBanner{
       position: sticky;
       top: 0;
@@ -166,17 +168,21 @@ export async function onRequest(context) {
     }
     .appText{ min-width:0; }
     .appName{ margin:0; font-size:14px; font-weight:800; letter-spacing:-0.01em; }
-    .appSub{ margin:0; font-size:12px; color: rgba(159,176,208,.85); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width: 56vw; }
+    .appSub{ margin:0; font-size:12px; color: rgba(159,176,208,.85);
+      white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width: 56vw; }
     .appRight{ display:flex; align-items:center; gap:10px; }
+
     .btn{
       appearance:none; border:0; border-radius: 14px;
       padding: 10px 12px; font-weight:800; cursor:pointer;
       text-decoration:none; display:inline-flex; align-items:center; justify-content:center;
       gap:8px; white-space:nowrap;
+      transition: transform .08s ease, opacity .08s ease;
     }
+    .btn:active{ transform: scale(.98); opacity: .92; }
     .btn.primary{ background: var(--btn); color:white; }
     .btn.ghost{ background: var(--btn2); color:var(--text); border:1px solid var(--line); }
-    .btn.danger{ background: rgba(255,59,48,.16); color: #fff; border: 1px solid rgba(255,59,48,.32); }
+    .btn.danger{ background: rgba(255,59,48,.16); color:#fff; border: 1px solid rgba(255,59,48,.32); }
     .closeX{
       width:36px; height:36px; border-radius: 12px;
       border:1px solid var(--line); background: rgba(255,255,255,.06);
@@ -184,15 +190,35 @@ export async function onRequest(context) {
       cursor:pointer; font-weight:900;
     }
 
+    /* Card */
     .card{
       margin-top: 14px;
       background: linear-gradient(180deg, rgba(18,24,38,.96), rgba(15,21,34,.96));
       border:1px solid var(--line);
       border-radius: var(--radius);
       overflow:hidden;
-      box-shadow: 0 14px 40px rgba(0,0,0,.38);
+      box-shadow: var(--shadow);
     }
 
+    /* Community banner bar (optioneel mooi extra) */
+    .communityBar{
+      display:flex; align-items:center; justify-content:space-between; gap:10px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(0,0,0,.14);
+    }
+    .communityLeft{ display:flex; align-items:center; gap:10px; min-width:0; }
+    .communityLeft .cIcon{
+      width:34px; height:34px; border-radius: 10px; object-fit: cover;
+      border:1px solid rgba(255,255,255,.12);
+      background:#111; flex:0 0 auto;
+    }
+    .communityText{ min-width:0; }
+    .communityName{ margin:0; font-size: 14px; font-weight: 900; letter-spacing:-.01em; }
+    .communityHandle{ margin:0; font-size: 12px; color: rgba(159,176,208,.78);
+      white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width: 55vw; }
+
+    /* Media */
     .hero{
       background:#000;
       aspect-ratio: 16/9;
@@ -206,24 +232,17 @@ export async function onRequest(context) {
       display:block;
     }
 
+    /* Meta */
     .meta{ padding: 16px 16px 12px; }
     .headerRow{
       display:flex; align-items:flex-start; gap:12px; justify-content:space-between;
       margin-bottom: 12px;
     }
-    .who{
-      display:flex; align-items:center; gap:10px; min-width:0;
-    }
-    .cIcon{
-      width:34px; height:34px; border-radius: 10px; object-fit: cover;
-      border:1px solid rgba(255,255,255,.12);
-      background:#111; flex:0 0 auto;
-    }
+    .who{ display:flex; align-items:center; gap:10px; min-width:0; }
     .uAvatar{
       width:28px; height:28px; border-radius: 999px; object-fit: cover;
       border:1px solid rgba(255,255,255,.12);
       background:#111; flex:0 0 auto;
-      margin-left: 2px;
     }
     .whoText{ min-width:0; }
     .line1{
@@ -257,16 +276,6 @@ export async function onRequest(context) {
       background: rgba(0,0,0,.12);
     }
 
-    .gate{
-      margin: 14px 0 0;
-      padding: 16px;
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-      background: rgba(255,255,255,.04);
-      text-align:center;
-    }
-    .gate h2{ margin: 0 0 6px; font-size: 18px; }
-    .gate p{ margin: 0 0 14px; color: var(--muted); font-size: 14px; line-height: 1.4; }
     .small{ margin-top: 12px; color: rgba(159,176,208,.65); font-size: 12px; text-align:center; }
 
     @media (max-width: 520px){
@@ -289,8 +298,8 @@ export async function onRequest(context) {
         </div>
         <div class="appRight">
           <a class="btn primary" id="bannerCta" href="${escapeHtml(bannerPrimaryHref)}" rel="noopener">${escapeHtml(
-    bannerPrimaryLabel
-  )}</a>
+            bannerPrimaryLabel
+          )}</a>
           <button class="closeX" id="bannerClose" aria-label="Close">✕</button>
         </div>
       </div>
@@ -300,24 +309,33 @@ export async function onRequest(context) {
   <div class="wrap">
     <div class="card">
 
+      <div class="communityBar">
+        <a class="communityLeft" href="${escapeHtml(communityUrl)}" rel="noopener" style="text-decoration:none;">
+          <img class="cIcon" src="${escapeHtml(communityIcon)}" alt="Community" />
+          <div class="communityText">
+            <p class="communityName">${escapeHtml(communityName)}</p>
+            <p class="communityHandle">${escapeHtml(communityHandle || "Community")}</p>
+          </div>
+        </a>
+        <a class="btn ghost" href="${escapeHtml(siteUrl)}" rel="noopener">Website</a>
+      </div>
+
       ${renderHero(hero.type, hero.url, hero.poster || `${siteUrl}/og-default.png`)}
 
       <div class="meta">
         <div class="headerRow">
           <div class="who">
-            <img class="cIcon" src="${escapeHtml(communityIcon)}" alt="Community" />
             <img class="uAvatar" src="${escapeHtml(userAvatar)}" alt="User" />
             <div class="whoText">
               <div class="line1">
-                <span>${escapeHtml(communityName)}</span>
-                ${communityHandle ? `<span class="muted">${escapeHtml(communityHandle)}</span>` : ""}
-                <span class="muted">•</span>
                 <span>${escapeHtml(username)}</span>
+                <span class="muted">•</span>
+                <span class="muted">${escapeHtml(timeAgoText)}</span>
               </div>
-              <div class="line2">${escapeHtml(timeAgoText)}</div>
+              <div class="line2">${escapeHtml("Posted in " + communityName)}</div>
             </div>
           </div>
-          <a class="btn ghost" href="${escapeHtml(siteUrl)}" rel="noopener">Website</a>
+          <a class="btn ghost" href="${escapeHtml(communityUrl)}" rel="noopener">Community</a>
         </div>
 
         <h1 class="title">${escapeHtml(title)}</h1>
@@ -404,31 +422,17 @@ async function fetchOne({ supabaseUrl, serviceRoleKey, table, filter, select }) 
   return data?.[0] || null;
 }
 
-// zelfde als fetchOne, maar nooit throwen/stoppen (best-effort)
-async function fetchOneSafe(args) {
-  try {
-    return await fetchOne(args);
-  } catch (_) {
-    return null;
-  }
-}
-
 function pickHero(post, siteUrl) {
   const mediaType = safeText(post.media_type);
   const mediaUrl = pickFirstHttp(post.media_url);
   const thumbUrl = pickFirstHttp(post.thumbnail_url);
 
-  // video: poster is thumbnail
   if (mediaType === "video" && mediaUrl) {
     return { type: "video", url: mediaUrl, poster: thumbUrl || `${siteUrl}/og-default.png` };
   }
-
-  // image
   if (mediaType === "image" && mediaUrl) {
     return { type: "image", url: mediaUrl, poster: mediaUrl };
   }
-
-  // fallback: thumbnail or default
   if (thumbUrl) return { type: "image", url: thumbUrl, poster: thumbUrl };
 
   return { type: "image", url: `${siteUrl}/og-default.png`, poster: `${siteUrl}/og-default.png` };
@@ -436,7 +440,6 @@ function pickHero(post, siteUrl) {
 
 function renderHero(type, url, poster) {
   if (type === "video") {
-    // playsinline belangrijk op iOS
     return `
       <div class="hero">
         <video
@@ -461,23 +464,19 @@ function buildDescription(body, isNsfw, isSpoiler) {
   if (isNsfw) tags.push("NSFW");
   if (isSpoiler) tags.push("Spoiler");
   const prefix = tags.length ? `[${tags.join(" · ")}] ` : "";
-  const text = body ? stripAndTrim(String(body), 160) : "Bekijk deze post op Ozvion.";
-  return prefix + text;
+  const t = body ? stripAndTrim(String(body), 160) : "Bekijk deze post op Ozvion.";
+  return prefix + t;
 }
 
 function stripAndTrim(s, maxLen) {
-  const stripped = s
-    .replace(/<[^>]*>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  const stripped = s.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
   if (stripped.length <= maxLen) return stripped;
   return stripped.slice(0, maxLen - 1).trimEnd() + "…";
 }
 
 function safeText(v) {
   if (v === null || v === undefined) return "";
-  const s = String(v).trim();
-  return s;
+  return String(v).trim();
 }
 
 function pickFirstHttp(v) {
@@ -496,7 +495,6 @@ function escapeHtml(str) {
 }
 
 function timeAgo(isoString) {
-  // werkt met "2026-01-08T..." etc
   const d = new Date(isoString);
   if (isNaN(d.getTime())) return "";
 
