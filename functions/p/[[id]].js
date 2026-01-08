@@ -1,69 +1,81 @@
 export async function onRequest(context) {
-  const { request, params } = context;
+  const { params, env, request } = context;
+  const id = params.id;
 
-  const id = params.id; // dit is <id> uit /p/<id>
-  const url = new URL(request.url);
-
-  // Als iemand per ongeluk /p opent zonder id
   if (!id) {
     return new Response("Missing post id", { status: 400 });
   }
 
-  // Tijdelijke demo-data (we koppelen Supabase in stap 2.6)
-  const title = `Ozvion Post ${id}`;
-  const description = "Open this post in Ozvion.";
-  const image = "https://ozvion.app/og-default.png"; // later vervangen
+  const supabaseUrl = env.SUPABASE_URL;
+  const supabaseKey = env.SUPABASE_ANON_KEY;
+
+  // 👉 Pas dit aan naar jouw echte tabel/kolommen
+  const res = await fetch(
+    `${supabaseUrl}/rest/v1/posts?id=eq.${id}&select=title,description,og_image`,
+    {
+      headers: {
+        apikey: supabaseKey,
+        Authorization: `Bearer ${supabaseKey}`,
+      },
+    }
+  );
+
+  if (!res.ok) {
+    return new Response("Post not found", { status: 404 });
+  }
+
+  const data = await res.json();
+  const post = data[0];
+
+  const title = post?.title ?? "Ozvion";
+  const description = post?.description ?? "Bekijk deze post op Ozvion.";
+  const image =
+    post?.og_image ?? "https://ozvion.app/og-default.png";
+
+  const url = new URL(request.url).toString();
 
   const html = `<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${escapeHtml(title)}</title>
+<meta charset="utf-8" />
+<title>${escapeHtml(title)}</title>
 
-  <!-- Open Graph -->
-  <meta property="og:title" content="${escapeHtml(title)}" />
-  <meta property="og:description" content="${escapeHtml(description)}" />
-  <meta property="og:image" content="${image}" />
-  <meta property="og:type" content="website" />
-  <meta property="og:url" content="${url.toString()}" />
+<!-- Open Graph -->
+<meta property="og:title" content="${escapeHtml(title)}" />
+<meta property="og:description" content="${escapeHtml(description)}" />
+<meta property="og:image" content="${image}" />
+<meta property="og:url" content="${url}" />
+<meta property="og:type" content="article" />
 
-  <!-- Twitter -->
-  <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="${escapeHtml(title)}" />
-  <meta name="twitter:description" content="${escapeHtml(description)}" />
-  <meta name="twitter:image" content="${image}" />
+<!-- Twitter -->
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="${escapeHtml(title)}" />
+<meta name="twitter:description" content="${escapeHtml(description)}" />
+<meta name="twitter:image" content="${image}" />
+
+<meta http-equiv="refresh" content="0; url=ozvion://post/${id}" />
 </head>
-<body style="font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 40px;">
-  <h1>${escapeHtml(title)}</h1>
-  <p>${escapeHtml(description)}</p>
+<body>
+<h1>${escapeHtml(title)}</h1>
+<p>${escapeHtml(description)}</p>
 
-  <p style="margin-top: 24px;">
-    <a href="ozvion://p/${encodeURIComponent(id)}" style="display:inline-block;padding:12px 16px;border:1px solid #ccc;border-radius:10px;text-decoration:none;">
-      Open in app
-    </a>
-  </p>
-
-  <p style="margin-top: 12px;">
-    <a href="https://ozvion.app" style="color:#555;">Open Ozvion website</a>
-  </p>
+<a href="ozvion://post/${id}">Open in app</a><br/>
+<a href="https://ozvion.app">Open Ozvion website</a>
 </body>
 </html>`;
 
   return new Response(html, {
     headers: {
-      "content-type": "text/html; charset=UTF-8",
-      // basis caching (mag later scherper)
-      "cache-control": "public, max-age=60",
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "public, max-age=300",
     },
   });
 }
 
-function escapeHtml(s) {
-  return String(s)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
