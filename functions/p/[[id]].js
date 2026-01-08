@@ -1,71 +1,84 @@
-// functions/p/[id].js
+// functions/p/[[id]].js
 
 export async function onRequest(context) {
   const { params, env, request } = context;
-  const id = params?.id;
 
-  if (!id) return text("Missing post id", 400);
+  // id kan bij Pages Functions soms undefined of array zijn
+  const rawId = params?.id;
+  const id = Array.isArray(rawId) ? rawId[0] : rawId;
+
+  if (!id) return new Response("Missing post id", { status: 400 });
+
+  // (optioneel) simpele UUID check
+  const uuidRe =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (!uuidRe.test(id)) return new Response("Invalid post id", { status: 400 });
 
   const supabaseUrl = (env.SUPABASE_URL || "").replace(/\/$/, "");
-  if (!supabaseUrl) return text("Missing SUPABASE_URL env var", 500);
+  if (!supabaseUrl) return new Response("Missing SUPABASE_URL env var", { status: 500 });
 
-  // Gebruik service role (server-side) om RLS te bypassen
-  const apiKey = env.SUPABASE_SERVICE_ROLE_KEY || "";
-  if (!apiKey) return text("Missing SUPABASE_SERVICE_ROLE_KEY env var", 500);
+  // ✅ Alleen service role gebruiken op de server (Cloudflare Secret)
+  const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!serviceRoleKey) {
+    return new Response("Missing SUPABASE_SERVICE_ROLE_KEY env var", { status: 500 });
+  }
 
   const qp = new URLSearchParams();
   qp.set("id", `eq.${id}`);
   qp.set(
     "select",
-    "id,title,body,thumbnail_url,media_url,media_type,is_nsfw,is_spoiler,link_url"
+    "id,title,body,thumbnail_url,media_url,media_type,is_nsfw,is_spoiler,link_url,created_at"
   );
   qp.set("limit", "1");
 
   const apiUrl = `${supabaseUrl}/rest/v1/posts?${qp.toString()}`;
 
   const res = await fetch(apiUrl, {
-    method: "GET",
     headers: {
-      apikey: apiKey,
-      Authorization: `Bearer ${apiKey}`,
+      apikey: serviceRoleKey,
+      Authorization: `Bearer ${serviceRoleKey}`,
       Accept: "application/json",
     },
   });
 
-  // Debug modus: /p/<id>?debug=1
-  const u = new URL(request.url);
-  const debug = u.searchParams.get("debug") === "1";
+  const debug = new URL(request.url).searchParams.get("debug") === "1";
 
-  if (!res.ok) {
-    const body = await safeText(res);
-    return text(
-      debug
-        ? `Supabase error\nStatus: ${res.status}\nURL: ${apiUrl}\nBody: ${body}`
-        : "Supabase error",
-      502
+  // Debug output (geen secrets)
+  if (debug) {
+    const text = await res.text();
+    return new Response(
+      JSON.stringify(
+        {
+          id,
+          supabaseUrl,
+          apiUrl,
+          status: res.status,
+          body: safeJson(text),
+        },
+        null,
+        2
+      ),
+      { headers: { "Content-Type": "application/json; charset=utf-8" } }
     );
   }
+
+  if (!res.ok) return new Response(`Supabase error: ${res.status}`, { status: 502 });
 
   const data = await res.json();
   const post = data?.[0];
-
-  if (!post) {
-    return text(
-      debug
-        ? `Post not found in DB\nTried id: ${id}\nURL: ${apiUrl}\nStatus: ${res.status}\nBody: ${JSON.stringify(data)}`
-        : "Post not found in DB",
-      404
-    );
-  }
+  if (!post) return new Response("Post not found in DB", { status: 404 });
 
   const siteUrl = (env.SITE_URL || "https://ozvion.app").replace(/\/$/, "");
-  const pageUrl = u.toString();
+  const pageUrl = new URL(request.url).toString();
 
   const title = post.title ? String(post.title) : "Ozvion";
   const description = buildDescription(post.body, post.is_nsfw, post.is_spoiler);
-  const image = pickOgImage(siteUrl, post.thumbnail_url, post.media_url, post.media_type);
 
-  // Deep link (pas aan als jouw scheme anders is)
+  const ogImage = pickOgImage(siteUrl, post.thumbnail_url, post.media_url, post.media_type);
+
+  const mediaHtml = buildMediaHtml(post.media_type, post.media_url, post.thumbnail_url);
+
+  // Deep link (alleen knop — géén auto-redirect, anders breek je video/UX in webviews)
   const deepLink = `ozvion://p/${encodeURIComponent(id)}`;
 
   const html = `<!doctype html>
@@ -75,33 +88,50 @@ export async function onRequest(context) {
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>${escapeHtml(title)}</title>
 
+<!-- Open Graph -->
 <meta property="og:title" content="${escapeHtml(title)}" />
 <meta property="og:description" content="${escapeHtml(description)}" />
-<meta property="og:image" content="${escapeHtml(image)}" />
+<meta property="og:image" content="${escapeHtml(ogImage)}" />
 <meta property="og:url" content="${escapeHtml(pageUrl)}" />
 <meta property="og:type" content="article" />
 
+<!-- Twitter -->
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:title" content="${escapeHtml(title)}" />
 <meta name="twitter:description" content="${escapeHtml(description)}" />
-<meta name="twitter:image" content="${escapeHtml(image)}" />
+<meta name="twitter:image" content="${escapeHtml(ogImage)}" />
 
-<meta http-equiv="refresh" content="0; url=${deepLink}" />
+<style>
+  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 24px; background: #fff; color:#111; }
+  .wrap { max-width: 720px; margin: 0 auto; }
+  .title { font-size: 42px; font-weight: 800; margin: 0 0 8px; }
+  .desc { color:#555; margin: 0 0 18px; line-height: 1.4; }
+  .media { margin: 18px 0 18px; border-radius: 14px; overflow: hidden; background:#000; }
+  video, img { width: 100%; height: auto; display:block; }
+  .btnrow { display:flex; gap:12px; flex-wrap:wrap; margin-top: 14px; }
+  .btn { display:inline-block; padding:12px 16px; border:1px solid #ddd; border-radius:12px; text-decoration:none; color:#111; background:#fff; }
+  .btn.primary { border-color:#111; }
+  .meta { margin-top: 14px; color:#777; font-size: 13px; }
+  .link { margin-top: 10px; }
+</style>
 </head>
-<body style="font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 40px;">
-  <h1 style="margin: 0 0 10px;">${escapeHtml(title)}</h1>
-  <p style="margin: 0 0 20px; color: #555;">${escapeHtml(description)}</p>
+<body>
+  <div class="wrap">
+    <h1 class="title">${escapeHtml(title)}</h1>
+    <p class="desc">${escapeHtml(description)}</p>
 
-  <p style="margin-top: 24px;">
-    <a href="${deepLink}"
-       style="display:inline-block; padding:12px 16px; border:1px solid #ccc; border-radius:10px; text-decoration:none;">
-      Open in app
-    </a>
-  </p>
+    ${mediaHtml}
 
-  <p style="margin-top: 12px;">
-    <a href="${siteUrl}" style="color:#555;">Open Ozvion website</a>
-  </p>
+    ${post.link_url ? `<div class="link"><a class="btn" href="${escapeHtml(safeHttpUrl(post.link_url) || siteUrl)}" rel="noopener">Open link</a></div>` : ""}
+
+    <div class="btnrow">
+      <a class="btn primary" href="${deepLink}">Open in app</a>
+      <a class="btn" href="${siteUrl}">Open Ozvion website</a>
+      <a class="btn" href="${siteUrl}/login">Login / Sign up</a>
+    </div>
+
+    <div class="meta">Post ID: ${escapeHtml(String(post.id))}</div>
+  </div>
 </body>
 </html>`;
 
@@ -113,10 +143,44 @@ export async function onRequest(context) {
   });
 }
 
+function buildMediaHtml(mediaType, mediaUrl, thumbnailUrl) {
+  const mUrl = safeHttpUrl(mediaUrl);
+  const tUrl = safeHttpUrl(thumbnailUrl);
+
+  if (mediaType === "video" && mUrl) {
+    const poster = tUrl ? ` poster="${escapeHtml(tUrl)}"` : "";
+    return `
+      <div class="media">
+        <video controls playsinline${poster}>
+          <source src="${escapeHtml(mUrl)}" />
+        </video>
+      </div>
+    `;
+  }
+
+  if (mediaType === "image" && mUrl) {
+    return `
+      <div class="media">
+        <img src="${escapeHtml(mUrl)}" alt="" />
+      </div>
+    `;
+  }
+
+  return ""; // geen media
+}
+
 function pickOgImage(siteUrl, thumbnailUrl, mediaUrl, mediaType) {
   const fallback = `${siteUrl}/og-default.png`;
-  if (thumbnailUrl && String(thumbnailUrl).startsWith("http")) return String(thumbnailUrl);
-  if (mediaType === "image" && mediaUrl && String(mediaUrl).startsWith("http")) return String(mediaUrl);
+
+  const t = safeHttpUrl(thumbnailUrl);
+  if (t) return t;
+
+  // OG previews willen vrijwel altijd een image (ook bij video)
+  if (mediaType === "image") {
+    const m = safeHttpUrl(mediaUrl);
+    if (m) return m;
+  }
+
   return fallback;
 }
 
@@ -135,6 +199,17 @@ function stripAndTrim(s, maxLen) {
   return stripped.slice(0, maxLen - 1).trimEnd() + "…";
 }
 
+function safeHttpUrl(u) {
+  const s = (u ?? "").toString().trim();
+  if (!s) return null;
+  if (s.startsWith("http://") || s.startsWith("https://")) return s;
+  return null;
+}
+
+function safeJson(text) {
+  try { return JSON.parse(text); } catch { return text; }
+}
+
 function escapeHtml(str) {
   return String(str)
     .replace(/&/g, "&amp;")
@@ -142,16 +217,4 @@ function escapeHtml(str) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
-}
-
-function text(msg, status = 200) {
-  return new Response(msg, { status, headers: { "Content-Type": "text/plain; charset=utf-8" } });
-}
-
-async function safeText(res) {
-  try {
-    return await res.text();
-  } catch {
-    return "";
-  }
 }
