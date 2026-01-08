@@ -2,30 +2,26 @@
 
 export async function onRequest(context) {
   const { params, env, request } = context;
+
+  // 1) Param
   const id = params?.id;
+  if (!id) return text("Missing post id", 400);
 
-  if (!id) {
-    return new Response("Missing post id", { status: 400 });
-  }
-
+  // 2) Env checks (hard requirements)
   const supabaseUrl = (env.SUPABASE_URL || "").replace(/\/$/, "");
-  if (!supabaseUrl) {
-    return new Response("Missing SUPABASE_URL env var", { status: 500 });
-  }
+  if (!supabaseUrl) return text("Missing SUPABASE_URL env var", 500);
 
-  // ✅ Gebruik SERVICE ROLE voor server-side fetch (bypasst RLS)
-  // Zet deze in Cloudflare als Secret: SUPABASE_SERVICE_ROLE_KEY
+  // ✅ Gebruik alleen service role (server-side)
   const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY;
-  const anonKey = env.SUPABASE_ANON_KEY; // optioneel fallback (niet ideaal)
-  const apiKey = serviceRoleKey || anonKey;
-
-  if (!apiKey) {
-    return new Response("Missing SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_ANON_KEY) env var", {
-      status: 500,
-    });
+  if (!serviceRoleKey) {
+    return text("Missing SUPABASE_SERVICE_ROLE_KEY env var (set as Secret in Cloudflare)", 500);
   }
 
-  // Bouw Supabase REST URL veilig op
+  const siteUrl = (env.SITE_URL || "https://ozvion.app").replace(/\/$/, "");
+  const pageUrl = new URL(request.url);
+  const debug = pageUrl.searchParams.get("debug") === "1";
+
+  // 3) Supabase REST query
   const qp = new URLSearchParams();
   qp.set("id", `eq.${id}`);
   qp.set(
@@ -36,40 +32,95 @@ export async function onRequest(context) {
 
   const apiUrl = `${supabaseUrl}/rest/v1/posts?${qp.toString()}`;
 
-  const res = await fetch(apiUrl, {
-    method: "GET",
-    headers: {
-      apikey: apiKey,
-      Authorization: `Bearer ${apiKey}`,
-      Accept: "application/json",
-    },
-  });
+  let res, bodyText, data, post;
 
-  if (!res.ok) {
-    // Handig voor debug (zonder secrets te lekken)
-    return new Response(`Supabase error: ${res.status}`, { status: 502 });
+  try {
+    res = await fetch(apiUrl, {
+      method: "GET",
+      headers: {
+        apikey: serviceRoleKey,
+        Authorization: `Bearer ${serviceRoleKey}`,
+        Accept: "application/json",
+      },
+    });
+
+    bodyText = await res.text();
+
+    // Debug: laat exact zien wat Supabase terugstuurt
+    if (debug) {
+      return text(
+        [
+          `Supabase URL: ${supabaseUrl}`,
+          `API URL: ${apiUrl}`,
+          `Status: ${res.status}`,
+          `Body: ${bodyText.slice(0, 2000)}`, // limit
+        ].join("\n\n"),
+        200
+      );
+    }
+
+    if (!res.ok) {
+      return text(`Supabase error: ${res.status}`, 502);
+    }
+
+    data = JSON.parse(bodyText);
+    post = data?.[0];
+  } catch (e) {
+    return text(`Fetch/parse error: ${String(e)}`, 502);
   }
 
-  const data = await res.json();
-  const post = data?.[0];
-
+  // 4) Als er geen rij is, geef nette fallback HTML (geen “zwart scherm”)
   if (!post) {
-    return new Response("Post not found in DB", { status: 404 });
+    const html = buildHtml({
+      title: "Ozvion",
+      description: "Bekijk deze post op Ozvion.",
+      image: `${siteUrl}/og-default.png`,
+      pageUrl: pageUrl.toString(),
+      deepLink: `ozvion://p/${encodeURIComponent(id)}`,
+      siteUrl,
+    });
+    return htmlResponse(html, 200);
   }
 
-  // OG velden opbouwen uit jouw schema
-  const siteUrl = (env.SITE_URL || "https://ozvion.app").replace(/\/$/, "");
-  const pageUrl = new URL(request.url).toString();
-
+  // 5) OG velden uit jouw schema
   const title = post.title ? String(post.title) : "Ozvion";
   const description = buildDescription(post.body, post.is_nsfw, post.is_spoiler);
-
   const image = pickOgImage(siteUrl, post.thumbnail_url, post.media_url, post.media_type);
-
-  // Deep link (pas aan als jouw scheme anders is)
   const deepLink = `ozvion://p/${encodeURIComponent(id)}`;
 
-  const html = `<!doctype html>
+  const html = buildHtml({
+    title,
+    description,
+    image,
+    pageUrl: pageUrl.toString(),
+    deepLink,
+    siteUrl,
+  });
+
+  return htmlResponse(html, 200);
+}
+
+/* ---------------- Helpers ---------------- */
+
+function htmlResponse(html, status = 200) {
+  return new Response(html, {
+    status,
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "public, max-age=60",
+    },
+  });
+}
+
+function text(msg, status = 200) {
+  return new Response(msg, {
+    status,
+    headers: { "Content-Type": "text/plain; charset=utf-8" },
+  });
+}
+
+function buildHtml({ title, description, image, pageUrl, deepLink, siteUrl }) {
+  return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -89,7 +140,7 @@ export async function onRequest(context) {
 <meta name="twitter:description" content="${escapeHtml(description)}" />
 <meta name="twitter:image" content="${escapeHtml(image)}" />
 
-<!-- (Optioneel) Probeer app te openen -->
+<!-- Probeer app te openen -->
 <meta http-equiv="refresh" content="0; url=${deepLink}" />
 </head>
 <body style="font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 40px;">
@@ -108,26 +159,12 @@ export async function onRequest(context) {
   </p>
 </body>
 </html>`;
-
-  return new Response(html, {
-    headers: {
-      "Content-Type": "text/html; charset=utf-8",
-      // Kort cachen: OG kan wijzigen
-      "Cache-Control": "public, max-age=60",
-    },
-  });
 }
 
 function pickOgImage(siteUrl, thumbnailUrl, mediaUrl, mediaType) {
   const fallback = `${siteUrl}/og-default.png`;
-
-  // Als je een thumbnail_url hebt, altijd die (beste voor OG)
   if (thumbnailUrl && String(thumbnailUrl).startsWith("http")) return String(thumbnailUrl);
-
-  // Als media een image is, gebruik media_url
   if (mediaType === "image" && mediaUrl && String(mediaUrl).startsWith("http")) return String(mediaUrl);
-
-  // Anders fallback
   return fallback;
 }
 
@@ -135,18 +172,13 @@ function buildDescription(body, isNsfw, isSpoiler) {
   const tags = [];
   if (isNsfw) tags.push("NSFW");
   if (isSpoiler) tags.push("Spoiler");
-
   const prefix = tags.length ? `[${tags.join(" · ")}] ` : "";
-
   const text = body ? stripAndTrim(String(body), 160) : "Bekijk deze post op Ozvion.";
   return prefix + text;
 }
 
 function stripAndTrim(s, maxLen) {
-  const stripped = s
-    .replace(/<[^>]*>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  const stripped = s.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
   if (stripped.length <= maxLen) return stripped;
   return stripped.slice(0, maxLen - 1).trimEnd() + "…";
 }
