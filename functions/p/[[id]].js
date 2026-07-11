@@ -1,4 +1,4 @@
-// functions/p/[[id]].js
+// functions/p/[[id]].js — Ozvion share page (v2, app-style redesign)
 
 export async function onRequest(context) {
   const { params, env, request } = context;
@@ -36,7 +36,7 @@ export async function onRequest(context) {
     select:
       "id,title,body,thumbnail_url,media_url,media_type,is_nsfw,is_spoiler,link_url,created_at,user_id,community_id",
   });
-  if (!post) return text("Post not found in DB", 404);
+  if (!post) return notFoundPage(appName, siteUrl, webUrl);
 
   // ---------- Fetch Profile + Community ----------
   const profile = post.user_id
@@ -61,30 +61,54 @@ export async function onRequest(context) {
 
   // ---------- Derived fields ----------
   const title = safeText(post.title) || appName;
-  const description = buildDescription(post.body, post.is_nsfw, post.is_spoiler);
+  const isNsfw = !!post.is_nsfw;
+  const isSpoiler = !!post.is_spoiler;
+  const isSensitive = isNsfw || isSpoiler;
+
+  const description = buildDescription(post.body, isNsfw, isSpoiler);
 
   const hero = pickHero(post, siteUrl);
-  const ogImage = hero.poster || `${siteUrl}/og-default.png`;
+
+  // Never leak NSFW/spoiler media into link previews.
+  const ogImage = isSensitive
+    ? `${siteUrl}/og-default.png`
+    : hero.poster || `${siteUrl}/og-default.png`;
 
   const username =
     safeText(profile?.display_name) ||
     safeText(profile?.username) ||
     safeText(profile?.full_name) ||
-    "User";
+    "Ozvion member";
 
-  const userAvatar = pickFirstHttp(profile?.avatar_url) || `${siteUrl}/avatar-default.png`;
+  const userAvatar = pickFirstHttp(profile?.avatar_url);
 
-  const communityName = safeText(community?.name) || "Ozvion";
-  const communityHandle = safeText(community?.handle) || "";
-  const communityIcon = pickFirstHttp(community?.icon_url) || `${siteUrl}/community-default.png`;
-  const communityUrl = communityHandle ? `${siteUrl}${communityHandle}` : siteUrl;
+  const communityName = safeText(community?.name) || appName;
+  const communityHandle = normalizeHandle(safeText(community?.handle), communityName);
+  const communityIcon = pickFirstHttp(community?.icon_url);
+  const communityUrl = joinUrl(siteUrl, safeText(community?.handle));
 
   const createdAt = safeText(post.created_at);
   const timeAgoText = createdAt ? timeAgo(createdAt) : "";
 
   const storeUrl = iosStoreUrl || androidStoreUrl || "";
-  const bannerPrimaryLabel = storeUrl ? "Get the App" : "Open in App";
-  const bannerPrimaryHref = storeUrl || deepLink;
+
+  // Inline SVG fallbacks (no more broken "?" icons if PNGs are missing)
+  const planeFallback = svgDataUri(
+    `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%23F25A1F'/><path d='M52 32 14 16l6 14-6 2 6 2-6 14z' fill='white'/></svg>`
+  );
+  const personFallback = svgDataUri(
+    `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='32' fill='%231C2836'/><circle cx='32' cy='25' r='11' fill='%236B7A8F'/><path d='M12 56c3-12 12-17 20-17s17 5 20 17z' fill='%236B7A8F'/></svg>`
+  );
+
+  const heroHtml = renderHero(hero, post.media_type, isNsfw, isSpoiler);
+
+  const videoMeta =
+    hero.type === "video" && !isSensitive && hero.url
+      ? `
+  <meta property="og:video" content="${escapeHtml(hero.url)}" />
+  <meta property="og:video:secure_url" content="${escapeHtml(hero.url)}" />
+  <meta property="og:video:type" content="video/mp4" />`
+      : "";
 
   // ---------- HTML ----------
   const html = `<!doctype html>
@@ -92,6 +116,7 @@ export async function onRequest(context) {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0E141D" />
   <title>${escapeHtml(title)} — ${escapeHtml(appName)}</title>
 
   <!-- Open Graph -->
@@ -100,7 +125,7 @@ export async function onRequest(context) {
   <meta property="og:image" content="${escapeHtml(ogImage)}" />
   <meta property="og:url" content="${escapeHtml(pageUrl)}" />
   <meta property="og:type" content="article" />
-  <meta property="og:site_name" content="${escapeHtml(appName)}" />
+  <meta property="og:site_name" content="${escapeHtml(appName)} — The Aviation Community" />${videoMeta}
 
   <!-- Twitter -->
   <meta name="twitter:card" content="summary_large_image" />
@@ -116,178 +141,84 @@ export async function onRequest(context) {
       : ""
   }
 
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,500;0,9..40,700;0,9..40,800;1,9..40,400&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-
   <style>
     :root {
-      --bg: #06090e;
-      --surface: rgba(12, 17, 28, 0.92);
-      --surface-elevated: rgba(18, 25, 42, 0.88);
-      --text: #e4eaf6;
-      --text-secondary: rgba(159, 176, 212, 0.82);
-      --text-tertiary: rgba(120, 140, 180, 0.6);
-      --accent: #00d4ff;
-      --accent-glow: rgba(0, 212, 255, 0.12);
-      --accent-glow-strong: rgba(0, 212, 255, 0.25);
-      --accent-warm: #4f8eff;
-      --border: rgba(100, 160, 255, 0.08);
-      --border-accent: rgba(0, 212, 255, 0.15);
-      --danger: #ff4757;
-      --success: #2ed573;
-      --radius: 16px;
-      --radius-sm: 10px;
-      --font: 'DM Sans', system-ui, -apple-system, sans-serif;
-      --mono: 'JetBrains Mono', 'SF Mono', monospace;
+      /* Matches the iOS app: ozBg ≈ #121A24, orange brand accent */
+      --bg: #0E141D;
+      --card: #121A24;
+      --card-elevated: #17212E;
+      --chip: rgba(255, 255, 255, 0.06);
+      --text: #F2F5F9;
+      --text-secondary: rgba(190, 201, 214, 0.85);
+      --text-tertiary: rgba(148, 161, 178, 0.6);
+      --accent: #F25A1F;
+      --accent-soft: #FF7A3C;
+      --border: rgba(255, 255, 255, 0.07);
+      --danger: #FF4757;
+      --radius: 18px;
+      --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+        Roboto, "Helvetica Neue", Arial, sans-serif;
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
+    html { background: var(--bg); }
+
     body {
       font-family: var(--font);
-      background: var(--bg);
+      background:
+        radial-gradient(ellipse 700px 420px at 50% -10%, rgba(242, 90, 31, 0.07), transparent 65%),
+        var(--bg);
       color: var(--text);
       min-height: 100vh;
-      overflow-x: hidden;
       -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
     }
 
-    /* ===== ANIMATED GRID BACKGROUND ===== */
-    .grid-bg {
-      position: fixed;
-      inset: 0;
-      z-index: 0;
-      overflow: hidden;
-      pointer-events: none;
-    }
-    .grid-bg::before {
-      content: '';
-      position: absolute;
-      inset: -50%;
-      background-image:
-        linear-gradient(rgba(0, 212, 255, 0.03) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(0, 212, 255, 0.03) 1px, transparent 1px);
-      background-size: 60px 60px;
-      animation: gridDrift 25s linear infinite;
-    }
-    .grid-bg::after {
-      content: '';
-      position: absolute;
-      inset: 0;
-      background:
-        radial-gradient(ellipse 900px 500px at 50% -5%, rgba(0,212,255,.10), transparent 70%),
-        radial-gradient(ellipse 600px 400px at 80% 20%, rgba(79,142,255,.06), transparent 60%),
-        radial-gradient(ellipse 500px 500px at 10% 60%, rgba(0,212,255,.04), transparent 60%);
-    }
+    .wrap { max-width: 640px; margin: 0 auto; padding: 0 16px; }
 
-    @keyframes gridDrift {
-      0% { transform: translate(0, 0); }
-      100% { transform: translate(60px, 60px); }
-    }
-
-    /* ===== FLOATING PARTICLES ===== */
-    .particles {
-      position: fixed;
-      inset: 0;
-      z-index: 0;
-      pointer-events: none;
-    }
-    .particle {
-      position: absolute;
-      width: 2px;
-      height: 2px;
-      background: var(--accent);
-      border-radius: 50%;
-      opacity: 0;
-      animation: particleFloat linear infinite;
-    }
-    .particle:nth-child(1) { left: 15%; animation-duration: 18s; animation-delay: 0s; }
-    .particle:nth-child(2) { left: 35%; animation-duration: 22s; animation-delay: 3s; }
-    .particle:nth-child(3) { left: 55%; animation-duration: 16s; animation-delay: 7s; }
-    .particle:nth-child(4) { left: 75%; animation-duration: 20s; animation-delay: 2s; }
-    .particle:nth-child(5) { left: 90%; animation-duration: 24s; animation-delay: 5s; }
-    .particle:nth-child(6) { left: 5%;  animation-duration: 19s; animation-delay: 9s; }
-
-    @keyframes particleFloat {
-      0%   { transform: translateY(100vh) scale(1); opacity: 0; }
-      10%  { opacity: 0.6; }
-      90%  { opacity: 0.6; }
-      100% { transform: translateY(-10vh) scale(0.5); opacity: 0; }
-    }
-
-    /* ===== LAYOUT ===== */
-    .page-content {
-      position: relative;
-      z-index: 1;
-    }
-    .wrap {
-      max-width: 680px;
-      margin: 0 auto;
-      padding: 0 16px;
-    }
-
-    /* ===== TOP BANNER (STICKY) ===== */
+    /* ===== STICKY TOP BAR ===== */
     .topBanner {
       position: sticky;
       top: 0;
       z-index: 100;
-      background: rgba(6, 9, 14, 0.82);
-      backdrop-filter: blur(20px) saturate(1.4);
-      -webkit-backdrop-filter: blur(20px) saturate(1.4);
+      background: rgba(14, 20, 29, 0.85);
+      backdrop-filter: blur(18px) saturate(1.3);
+      -webkit-backdrop-filter: blur(18px) saturate(1.3);
       border-bottom: 1px solid var(--border);
-      padding: 0 16px;
-      transition: transform 0.3s ease;
+      transition: transform 0.25s ease;
     }
     .topBanner.hidden { transform: translateY(-100%); }
     .topBannerInner {
-      max-width: 680px;
+      max-width: 640px;
       margin: 0 auto;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      height: 62px;
       gap: 12px;
+      height: 60px;
+      padding: 0 16px;
     }
-    .topLeft { display: flex; align-items: center; gap: 12px; min-width: 0; }
-    .topIcon {
-      width: 38px; height: 38px;
-      border-radius: 10px;
-      border: 1px solid var(--border-accent);
+    .topLeft { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .appIcon {
+      width: 36px; height: 36px;
+      border-radius: 9px;
       object-fit: cover;
       flex-shrink: 0;
-      box-shadow: 0 0 16px rgba(0,212,255,.10);
     }
-    .topText { min-width: 0; }
-    .topAppName {
-      font-size: 14px;
-      font-weight: 700;
-      letter-spacing: -0.01em;
-      color: var(--text);
-    }
-    .topSub {
-      font-size: 11.5px;
-      color: var(--text-tertiary);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      max-width: 50vw;
-      font-family: var(--mono);
-      letter-spacing: 0.02em;
-    }
+    .topAppName { font-size: 15px; font-weight: 800; letter-spacing: -0.02em; }
+    .topSub { font-size: 11.5px; color: var(--text-tertiary); }
     .topRight { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
     .topClose {
-      width: 32px; height: 32px;
-      border-radius: 8px;
-      border: 1px solid var(--border);
-      background: transparent;
+      width: 30px; height: 30px;
+      border-radius: 999px;
+      border: none;
+      background: var(--chip);
       color: var(--text-tertiary);
       cursor: pointer;
-      font-size: 14px;
+      font-size: 13px;
       display: flex; align-items: center; justify-content: center;
-      transition: all 0.15s ease;
     }
-    .topClose:hover { border-color: var(--border-accent); color: var(--text-secondary); }
 
     /* ===== BUTTONS ===== */
     .btn {
@@ -302,106 +233,60 @@ export async function onRequest(context) {
       justify-content: center;
       gap: 8px;
       white-space: nowrap;
-      transition: all 0.15s ease;
+      transition: transform 0.12s ease, box-shadow 0.15s ease, background 0.15s ease;
       letter-spacing: -0.01em;
     }
     .btn:active { transform: scale(0.97); }
 
     .btn-primary {
-      background: linear-gradient(135deg, #00d4ff, #4f8eff);
-      color: #000;
-      font-weight: 800;
-      border-radius: 12px;
-      padding: 10px 20px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-soft));
+      color: #fff;
+      border-radius: 999px;
+      padding: 9px 18px;
       font-size: 13.5px;
-      box-shadow: 0 0 20px rgba(0,212,255,.20), inset 0 1px 0 rgba(255,255,255,.15);
-      position: relative;
-      overflow: hidden;
+      font-weight: 800;
+      box-shadow: 0 4px 18px rgba(242, 90, 31, 0.30);
     }
-    .btn-primary::before {
-      content: '';
-      position: absolute;
-      inset: 0;
-      background: linear-gradient(135deg, rgba(255,255,255,.15), transparent 60%);
-      opacity: 0;
-      transition: opacity 0.15s ease;
-    }
-    .btn-primary:hover::before { opacity: 1; }
-    .btn-primary:hover {
-      box-shadow: 0 0 32px rgba(0,212,255,.35), inset 0 1px 0 rgba(255,255,255,.2);
-    }
+    .btn-primary:hover { box-shadow: 0 6px 24px rgba(242, 90, 31, 0.42); }
 
     .btn-ghost {
-      background: rgba(255,255,255,0.04);
+      background: var(--chip);
       color: var(--text-secondary);
       border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 10px 18px;
+      border-radius: 999px;
+      padding: 9px 16px;
       font-size: 13px;
     }
-    .btn-ghost:hover {
-      background: rgba(255,255,255,0.07);
-      border-color: var(--border-accent);
-      color: var(--text);
-    }
+    .btn-ghost:hover { background: rgba(255,255,255,0.09); color: var(--text); }
 
-    .btn-cta-large {
-      background: linear-gradient(135deg, #00d4ff, #4f8eff);
-      color: #000;
+    .btn-cta {
+      width: 100%;
+      background: linear-gradient(135deg, var(--accent), var(--accent-soft));
+      color: #fff;
       font-weight: 800;
-      border-radius: 16px;
-      padding: 16px 32px;
+      border-radius: 999px;
+      padding: 16px 28px;
       font-size: 16px;
       letter-spacing: -0.02em;
-      width: 100%;
       box-shadow:
-        0 0 40px rgba(0,212,255,.18),
-        0 8px 32px rgba(0,0,0,.4),
-        inset 0 1px 0 rgba(255,255,255,.15);
-      position: relative;
-      overflow: hidden;
+        0 8px 30px rgba(242, 90, 31, 0.35),
+        inset 0 1px 0 rgba(255, 255, 255, 0.18);
     }
-    .btn-cta-large::before {
-      content: '';
-      position: absolute;
-      inset: -2px;
-      border-radius: 18px;
-      background: linear-gradient(135deg, rgba(0,212,255,.4), rgba(79,142,255,.4));
-      z-index: -1;
-      filter: blur(8px);
-      opacity: 0;
-      transition: opacity 0.3s ease;
-    }
-    .btn-cta-large:hover { box-shadow: 0 0 50px rgba(0,212,255,.30), 0 8px 32px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.2); }
-    .btn-cta-large:hover::before { opacity: 1; }
-
-    .btn-danger {
-      background: rgba(255,71,87,.08);
-      color: rgba(255,71,87,.9);
-      border: 1px solid rgba(255,71,87,.15);
-      border-radius: 12px;
-      padding: 10px 18px;
-      font-size: 13px;
-    }
-    .btn-danger:hover { background: rgba(255,71,87,.14); border-color: rgba(255,71,87,.25); }
+    .btn-cta:hover { box-shadow: 0 10px 38px rgba(242, 90, 31, 0.48); }
 
     /* ===== CARD ===== */
     .card {
       margin-top: 16px;
-      background: var(--surface);
+      background: var(--card);
       border: 1px solid var(--border);
-      border-radius: 20px;
+      border-radius: var(--radius);
       overflow: hidden;
-      box-shadow:
-        0 20px 60px rgba(0,0,0,.4),
-        0 0 0 1px rgba(100,160,255,.04),
-        inset 0 1px 0 rgba(255,255,255,.03);
-      animation: cardEnter 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
-      animation-delay: 0.1s;
+      box-shadow: 0 22px 60px rgba(0, 0, 0, 0.45);
+      animation: cardEnter 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
     }
     @keyframes cardEnter {
-      from { opacity: 0; transform: translateY(20px) scale(0.98); }
-      to   { opacity: 1; transform: translateY(0) scale(1); }
+      from { opacity: 0; transform: translateY(16px); }
+      to   { opacity: 1; transform: translateY(0); }
     }
 
     /* ===== COMMUNITY BAR ===== */
@@ -410,35 +295,22 @@ export async function onRequest(context) {
       align-items: center;
       justify-content: space-between;
       gap: 12px;
-      padding: 14px 18px;
+      padding: 12px 16px;
       border-bottom: 1px solid var(--border);
-      background: rgba(0,0,0,.18);
     }
     .communityLeft {
       display: flex; align-items: center; gap: 10px; min-width: 0;
       text-decoration: none; color: inherit;
     }
     .cIcon {
-      width: 36px; height: 36px;
-      border-radius: 10px;
+      width: 34px; height: 34px;
+      border-radius: 999px;
       object-fit: cover;
-      border: 1px solid var(--border-accent);
-      background: #0a0f18;
+      background: var(--card-elevated);
       flex-shrink: 0;
     }
-    .communityText { min-width: 0; }
-    .cName {
-      font-size: 14px;
-      font-weight: 800;
-      letter-spacing: -0.01em;
-    }
-    .cHandle {
-      font-size: 11.5px;
-      color: var(--text-tertiary);
-      font-family: var(--mono);
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-      max-width: 50vw;
-    }
+    .cName { font-size: 14px; font-weight: 800; letter-spacing: -0.01em; }
+    .cSub { font-size: 11.5px; color: var(--text-tertiary); }
 
     /* ===== HERO ===== */
     .hero {
@@ -448,148 +320,128 @@ export async function onRequest(context) {
       background: #000;
       overflow: hidden;
     }
-    .hero video, .hero img {
+    .hero video, .hero img.heroMedia {
       width: 100%; height: 100%;
       object-fit: cover;
       display: block;
     }
-    /* Cinematic vignette */
-    .hero::after {
-      content: '';
+    .hero.sensitive video,
+    .hero.sensitive img.heroMedia {
+      filter: blur(34px) brightness(0.55);
+      transform: scale(1.1);
+    }
+    .hero.revealed video,
+    .hero.revealed img.heroMedia {
+      filter: none;
+      transform: none;
+    }
+    .sensitiveOverlay {
       position: absolute;
       inset: 0;
-      background:
-        linear-gradient(0deg, rgba(6,9,14,.6) 0%, transparent 30%),
-        linear-gradient(180deg, rgba(6,9,14,.3) 0%, transparent 15%);
-      pointer-events: none;
+      z-index: 3;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      background: rgba(0, 0, 0, 0.25);
     }
-    /* Corner brackets (HUD-style) */
-    .hero-hud {
-      position: absolute;
-      inset: 12px;
-      z-index: 2;
-      pointer-events: none;
+    .hero.revealed .sensitiveOverlay { display: none; }
+    .sensitiveLabel {
+      font-size: 14px;
+      font-weight: 800;
+      letter-spacing: 0.02em;
+      color: #fff;
+      text-shadow: 0 2px 10px rgba(0,0,0,0.6);
     }
-    .hero-hud::before, .hero-hud::after,
-    .hero-hud-inner::before, .hero-hud-inner::after {
-      content: '';
-      position: absolute;
-      width: 24px;
-      height: 24px;
-      border-color: rgba(0,212,255,.30);
-      border-style: solid;
+    .revealBtn {
+      background: #fff;
+      color: #000;
+      border: none;
+      border-radius: 999px;
+      padding: 11px 26px;
+      font-size: 14.5px;
+      font-weight: 800;
+      font-family: var(--font);
+      cursor: pointer;
     }
-    .hero-hud::before { top: 0; left: 0; border-width: 1px 0 0 1px; }
-    .hero-hud::after { top: 0; right: 0; border-width: 1px 1px 0 0; }
-    .hero-hud-inner::before { bottom: 0; left: 0; border-width: 0 0 1px 1px; }
-    .hero-hud-inner::after { bottom: 0; right: 0; border-width: 0 1px 1px 0; }
-    /* Type badge on hero */
     .hero-badge {
       position: absolute;
-      bottom: 16px; left: 16px;
-      z-index: 3;
-      font-family: var(--mono);
+      bottom: 12px; left: 12px;
+      z-index: 2;
       font-size: 10.5px;
-      font-weight: 600;
-      letter-spacing: 0.06em;
+      font-weight: 800;
+      letter-spacing: 0.05em;
       text-transform: uppercase;
       padding: 5px 10px;
-      border-radius: 6px;
-      background: rgba(0,0,0,.65);
+      border-radius: 999px;
+      background: rgba(0, 0, 0, 0.6);
       backdrop-filter: blur(8px);
-      border: 1px solid rgba(0,212,255,.15);
-      color: var(--accent);
+      color: rgba(255, 255, 255, 0.9);
     }
 
     /* ===== META ===== */
-    .meta { padding: 20px 18px 16px; }
+    .meta { padding: 16px; }
 
     .authorRow {
       display: flex; align-items: center; gap: 10px;
-      margin-bottom: 16px;
+      margin-bottom: 12px;
     }
     .uAvatar {
-      width: 32px; height: 32px;
+      width: 34px; height: 34px;
       border-radius: 999px;
       object-fit: cover;
-      border: 1.5px solid var(--border-accent);
-      background: #0a0f18;
+      background: var(--card-elevated);
       flex-shrink: 0;
     }
-    .authorInfo { min-width: 0; flex: 1; }
-    .authorName {
-      font-size: 13.5px;
-      font-weight: 700;
-    }
+    .authorName { font-size: 13.5px; font-weight: 700; }
     .authorMeta {
-      font-size: 11.5px;
-      font-family: var(--mono);
+      font-size: 12px;
       color: var(--text-tertiary);
-      display: flex; align-items: center; gap: 6px;
+      display: flex; align-items: center; gap: 5px;
     }
-    .authorMeta .dot { color: var(--accent); opacity: 0.5; }
 
     .postTitle {
-      font-size: 28px;
-      line-height: 1.15;
+      font-size: 24px;
+      line-height: 1.2;
       font-weight: 800;
-      letter-spacing: -0.03em;
-      margin-bottom: 10px;
-      background: linear-gradient(135deg, var(--text), rgba(159,176,212,.75));
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
+      letter-spacing: -0.02em;
+      margin-bottom: 8px;
     }
     .postBody {
       color: var(--text-secondary);
       font-size: 14.5px;
-      line-height: 1.6;
+      line-height: 1.55;
       white-space: pre-wrap;
     }
 
-    .tags { margin-top: 14px; display: flex; gap: 6px; flex-wrap: wrap; }
+    .tags { margin-top: 12px; display: flex; gap: 6px; flex-wrap: wrap; }
     .pill {
-      font-family: var(--mono);
       font-size: 10.5px;
-      font-weight: 600;
+      font-weight: 700;
       letter-spacing: 0.04em;
       text-transform: uppercase;
-      padding: 5px 10px;
-      border-radius: 6px;
-      background: rgba(255,255,255,.04);
+      padding: 5px 11px;
+      border-radius: 999px;
+      background: var(--chip);
       border: 1px solid var(--border);
       color: var(--text-secondary);
     }
     .pill.danger {
-      background: rgba(255,71,87,.08);
-      border-color: rgba(255,71,87,.18);
-      color: rgba(255,71,87,.9);
+      background: rgba(255, 71, 87, 0.10);
+      border-color: rgba(255, 71, 87, 0.22);
+      color: rgba(255, 99, 112, 0.95);
     }
 
-    /* ===== BLURRED OVERLAY / CTA SECTION ===== */
-    .ctaOverlay {
-      position: relative;
+    /* ===== CTA ===== */
+    .ctaSection {
       border-top: 1px solid var(--border);
-      background: rgba(0,0,0,.25);
-      padding: 0;
-      overflow: hidden;
-    }
-    .ctaBlur {
-      padding: 28px 18px 24px;
+      padding: 24px 16px 22px;
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 14px;
-      position: relative;
-      z-index: 1;
-    }
-    .ctaOverlay::before {
-      content: '';
-      position: absolute;
-      top: -1px; left: 50%; transform: translateX(-50%);
-      width: 200px;
-      height: 1px;
-      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+      gap: 12px;
+      background: linear-gradient(180deg, rgba(242, 90, 31, 0.05), transparent 70%);
     }
     .ctaHeadline {
       font-size: 15px;
@@ -597,33 +449,40 @@ export async function onRequest(context) {
       text-align: center;
       letter-spacing: -0.01em;
     }
-    .ctaHeadline strong {
-      color: var(--accent);
-      font-weight: 800;
-    }
+    .ctaHeadline strong { color: var(--accent-soft); font-weight: 800; }
     .ctaSub {
       font-size: 12px;
       color: var(--text-tertiary);
       text-align: center;
-      font-family: var(--mono);
+      margin-top: -6px;
+    }
+    .ctaStore {
+      font-size: 13px;
+      color: var(--text-tertiary);
+      text-decoration: none;
+      padding: 6px 10px;
+    }
+    .ctaStore:hover { color: var(--text-secondary); }
+
+    /* ===== FOOTER ===== */
+    .footer {
+      margin-top: 24px;
+      padding-bottom: 110px; /* room for floating bar */
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+    }
+    .footerLogo {
+      width: 30px; height: 30px;
+      border-radius: 8px;
+    }
+    .footerBrand {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text-tertiary);
       letter-spacing: 0.02em;
     }
-
-    .ctaActions {
-      display: flex;
-      gap: 10px;
-      width: 100%;
-      flex-wrap: wrap;
-    }
-    .ctaActions .btn-cta-large { flex: 1 1 100%; }
-
-    .ctaSecondary {
-      display: flex;
-      gap: 8px;
-      width: 100%;
-      margin-top: 2px;
-    }
-    .ctaSecondary a { flex: 1; text-align: center; font-size: 12.5px; }
 
     /* ===== FLOATING BOTTOM BAR (MOBILE) ===== */
     .floatingBar {
@@ -632,221 +491,149 @@ export async function onRequest(context) {
       left: 0; right: 0;
       z-index: 90;
       padding: 12px 16px calc(env(safe-area-inset-bottom, 8px) + 12px);
-      background: rgba(6,9,14,.88);
-      backdrop-filter: blur(20px) saturate(1.4);
-      -webkit-backdrop-filter: blur(20px) saturate(1.4);
+      background: rgba(14, 20, 29, 0.9);
+      backdrop-filter: blur(18px) saturate(1.3);
+      -webkit-backdrop-filter: blur(18px) saturate(1.3);
       border-top: 1px solid var(--border);
-      animation: floatUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
-      animation-delay: 0.8s;
+      animation: floatUp 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+      animation-delay: 0.5s;
     }
     @keyframes floatUp {
       from { opacity: 0; transform: translateY(100%); }
       to   { opacity: 1; transform: translateY(0); }
     }
     .floatingBarInner {
-      max-width: 680px;
+      max-width: 640px;
       margin: 0 auto;
       display: flex;
       align-items: center;
       gap: 10px;
     }
-    .floatingBarText {
-      flex: 1;
-      min-width: 0;
-    }
-    .floatingBarText p:first-child {
-      font-size: 13px;
-      font-weight: 700;
-      letter-spacing: -0.01em;
-    }
-    .floatingBarText p:last-child {
-      font-size: 11px;
-      color: var(--text-tertiary);
-      font-family: var(--mono);
-    }
-    .floatingBarBtn {
-      flex-shrink: 0;
-    }
+    .floatingBarText { flex: 1; min-width: 0; }
+    .floatingBarText p:first-child { font-size: 13px; font-weight: 800; }
+    .floatingBarText p:last-child { font-size: 11.5px; color: var(--text-tertiary); }
 
-    /* ===== POST ID FOOTER ===== */
-    .footer {
-      margin-top: 20px;
-      padding-bottom: 100px; /* space for floating bar */
-      text-align: center;
-    }
-    .footer-id {
-      font-family: var(--mono);
-      font-size: 10.5px;
-      color: var(--text-tertiary);
-      letter-spacing: 0.04em;
-      opacity: 0.6;
-    }
-    .footer-brand {
-      margin-top: 8px;
-      font-size: 11px;
-      color: var(--text-tertiary);
-      opacity: 0.4;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      font-weight: 600;
-    }
-
-    /* ===== SCANLINE EFFECT (subtle) ===== */
-    .scanline {
-      position: fixed;
-      top: 0; left: 0; right: 0;
-      height: 2px;
-      background: linear-gradient(90deg, transparent 20%, var(--accent) 50%, transparent 80%);
-      opacity: 0.08;
-      z-index: 200;
-      animation: scanMove 4s linear infinite;
-      pointer-events: none;
-    }
-    @keyframes scanMove {
-      0%   { top: -2px; }
-      100% { top: 100vh; }
-    }
-
-    /* ===== RESPONSIVE ===== */
     @media (max-width: 520px) {
-      .postTitle { font-size: 24px; }
-      .btn-cta-large { padding: 14px 24px; font-size: 15px; }
+      .postTitle { font-size: 21px; }
     }
     @media (min-width: 768px) {
       .floatingBar { display: none; }
+      .footer { padding-bottom: 40px; }
     }
   </style>
 </head>
 
 <body>
-  <!-- Ambient background -->
-  <div class="grid-bg"></div>
-  <div class="particles">
-    <div class="particle"></div>
-    <div class="particle"></div>
-    <div class="particle"></div>
-    <div class="particle"></div>
-    <div class="particle"></div>
-    <div class="particle"></div>
+  <!-- ===== STICKY TOP BANNER ===== -->
+  <div class="topBanner" id="topBanner">
+    <div class="topBannerInner">
+      <div class="topLeft">
+        <img class="appIcon" src="${escapeHtml(appIconUrl)}" alt="${escapeHtml(appName)}"
+             onerror="this.onerror=null;this.src='${planeFallback}'" />
+        <div>
+          <div class="topAppName">${escapeHtml(appName)}</div>
+          <div class="topSub">The Aviation Community</div>
+        </div>
+      </div>
+      <div class="topRight">
+        <a class="btn btn-primary" href="#" id="topOpenBtn">Get the App</a>
+        <button class="topClose" id="bannerClose" aria-label="Close banner">✕</button>
+      </div>
+    </div>
   </div>
-  <div class="scanline"></div>
 
-  <div class="page-content">
+  <!-- ===== MAIN CARD ===== -->
+  <div class="wrap">
+    <div class="card">
 
-    <!-- ===== STICKY TOP BANNER ===== -->
-    <div class="topBanner" id="topBanner">
-      <div class="topBannerInner">
-        <div class="topLeft">
-          <img class="topIcon" src="${escapeHtml(appIconUrl)}" alt="${escapeHtml(appName)}" />
-          <div class="topText">
-            <div class="topAppName">${escapeHtml(appName)}</div>
-            <div class="topSub">The Aviation Community</div>
+      <!-- Community Bar -->
+      <div class="communityBar">
+        <a class="communityLeft" href="${escapeHtml(communityUrl)}" rel="noopener">
+          <img class="cIcon" src="${escapeHtml(communityIcon || planeFallback)}" alt="${escapeHtml(communityHandle)}"
+               onerror="this.onerror=null;this.src='${planeFallback}'" />
+          <div>
+            <div class="cName">${escapeHtml(communityHandle)}</div>
+            <div class="cSub">${escapeHtml(communityName)}</div>
           </div>
-        </div>
-        <div class="topRight">
-          <a class="btn btn-primary" href="${escapeHtml(bannerPrimaryHref)}" rel="noopener">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            ${escapeHtml(bannerPrimaryLabel)}
-          </a>
-          <button class="topClose" id="bannerClose" aria-label="Close banner">✕</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- ===== MAIN CARD ===== -->
-    <div class="wrap">
-      <div class="card">
-
-        <!-- Community Bar -->
-        <div class="communityBar">
-          <a class="communityLeft" href="${escapeHtml(communityUrl)}" rel="noopener">
-            <img class="cIcon" src="${escapeHtml(communityIcon)}" alt="${escapeHtml(communityName)}" />
-            <div class="communityText">
-              <div class="cName">${escapeHtml(communityName)}</div>
-              <div class="cHandle">${escapeHtml(communityHandle || communityName)}</div>
-            </div>
-          </a>
-          <a class="btn btn-ghost" href="${escapeHtml(webUrl)}" rel="noopener" style="font-size:12px;">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
-            Website
-          </a>
-        </div>
-
-        <!-- Hero Media -->
-        ${renderHero(hero.type, hero.url, hero.poster || `${siteUrl}/og-default.png`, post.media_type)}
-
-        <!-- Post Content -->
-        <div class="meta">
-          <div class="authorRow">
-            <img class="uAvatar" src="${escapeHtml(userAvatar)}" alt="${escapeHtml(username)}" />
-            <div class="authorInfo">
-              <div class="authorName">${escapeHtml(username)}</div>
-              <div class="authorMeta">
-                <span>${escapeHtml(communityName)}</span>
-                <span class="dot">·</span>
-                <span>${escapeHtml(timeAgoText)}</span>
-              </div>
-            </div>
-          </div>
-
-          <h1 class="postTitle">${escapeHtml(title)}</h1>
-          ${post.body ? `<p class="postBody">${escapeHtml(post.body)}</p>` : ""}
-
-          <div class="tags">
-            ${post.is_nsfw ? `<span class="pill danger">NSFW</span>` : ""}
-            ${post.is_spoiler ? `<span class="pill danger">SPOILER</span>` : ""}
-            ${post.media_type ? `<span class="pill">${escapeHtml(String(post.media_type).toUpperCase())}</span>` : ""}
-            ${post.link_url ? `<span class="pill">LINK</span>` : ""}
-          </div>
-        </div>
-
-        <!-- CTA Section -->
-        <div class="ctaOverlay">
-          <div class="ctaBlur">
-            <div class="ctaHeadline">Continue in the <strong>${escapeHtml(appName)}</strong> app</div>
-            <div class="ctaSub">Comments · Reactions · Full Experience</div>
-            <div class="ctaActions">
-              <a class="btn btn-cta-large" href="${escapeHtml(deepLink)}" rel="noopener">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                Open in ${escapeHtml(appName)}
-              </a>
-            </div>
-            <div class="ctaSecondary">
-              ${storeUrl ? `<a class="btn btn-ghost" href="${escapeHtml(storeUrl)}" rel="noopener">Download App</a>` : ""}
-              <a class="btn btn-ghost" href="${escapeHtml(webUrl)}" rel="noopener">Visit Website</a>
-              <a class="btn btn-danger" href="${escapeHtml(webUrl + "/login")}" rel="noopener">Login / Sign up</a>
-            </div>
-          </div>
-        </div>
-
-      </div>
-
-      <!-- Footer -->
-      <div class="footer">
-        <div class="footer-id">ID: ${escapeHtml(String(post.id || id))}</div>
-        <div class="footer-brand">${escapeHtml(appName)}</div>
-      </div>
-    </div>
-
-    <!-- ===== FLOATING BOTTOM BAR (MOBILE) ===== -->
-    <div class="floatingBar" id="floatingBar">
-      <div class="floatingBarInner">
-        <img class="topIcon" src="${escapeHtml(appIconUrl)}" alt="${escapeHtml(appName)}" style="width:34px;height:34px;border-radius:8px;" />
-        <div class="floatingBarText">
-          <p>Open in ${escapeHtml(appName)}</p>
-          <p>See full post + comments</p>
-        </div>
-        <a class="btn btn-primary floatingBarBtn" href="${escapeHtml(bannerPrimaryHref)}" rel="noopener" style="padding:10px 18px;font-size:13px;">
-          ${escapeHtml(bannerPrimaryLabel)}
         </a>
       </div>
+
+      <!-- Hero Media -->
+      ${heroHtml}
+
+      <!-- Post Content -->
+      <div class="meta">
+        <div class="authorRow">
+          <img class="uAvatar" src="${escapeHtml(userAvatar || personFallback)}" alt="${escapeHtml(username)}"
+               onerror="this.onerror=null;this.src='${personFallback}'" />
+          <div>
+            <div class="authorName">${escapeHtml(username)}</div>
+            <div class="authorMeta">
+              <span>${escapeHtml(communityHandle)}</span>
+              ${timeAgoText ? `<span>·</span><span>${escapeHtml(timeAgoText)}</span>` : ""}
+            </div>
+          </div>
+        </div>
+
+        <h1 class="postTitle">${escapeHtml(title)}</h1>
+        ${post.body ? `<p class="postBody">${escapeHtml(stripAndTrim(String(post.body), 400))}</p>` : ""}
+
+        ${
+          isNsfw || isSpoiler || post.link_url
+            ? `<div class="tags">
+                ${isNsfw ? `<span class="pill danger">NSFW</span>` : ""}
+                ${isSpoiler ? `<span class="pill danger">Spoiler</span>` : ""}
+                ${post.link_url ? `<span class="pill">Link</span>` : ""}
+              </div>`
+            : ""
+        }
+      </div>
+
+      <!-- CTA -->
+      <div class="ctaSection">
+        <div class="ctaHeadline">See the full post in <strong>${escapeHtml(appName)}</strong></div>
+        <div class="ctaSub">Comments · Votes · Live streams · The aviation community</div>
+        <a class="btn btn-cta" href="#" id="mainOpenBtn">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+          Open in ${escapeHtml(appName)}
+        </a>
+        ${
+          storeUrl
+            ? `<a class="ctaStore" href="${escapeHtml(storeUrl)}" rel="noopener">Don't have the app? Download it free →</a>`
+            : ""
+        }
+      </div>
+
     </div>
 
+    <!-- Footer -->
+    <div class="footer">
+      <img class="footerLogo" src="${escapeHtml(appIconUrl)}" alt=""
+           onerror="this.onerror=null;this.src='${planeFallback}'" />
+      <div class="footerBrand">${escapeHtml(appName)} — The Aviation Community</div>
+    </div>
+  </div>
+
+  <!-- ===== FLOATING BOTTOM BAR (MOBILE) ===== -->
+  <div class="floatingBar" id="floatingBar">
+    <div class="floatingBarInner">
+      <img class="appIcon" src="${escapeHtml(appIconUrl)}" alt=""
+           style="width:34px;height:34px;border-radius:8px;"
+           onerror="this.onerror=null;this.src='${planeFallback}'" />
+      <div class="floatingBarText">
+        <p>Open in ${escapeHtml(appName)}</p>
+        <p>Full post, comments &amp; more</p>
+      </div>
+      <a class="btn btn-primary" href="#" id="floatOpenBtn" style="padding:10px 18px;font-size:13px;">Open</a>
+    </div>
   </div>
 
   <script>
     (function(){
-      // Banner close
+      var DEEP_LINK = ${JSON.stringify(deepLink)};
+      var STORE_URL = ${JSON.stringify(storeUrl)};
+
+      // --- Banner close (persist per session) ---
       var banner = document.getElementById('topBanner');
       var closeBtn = document.getElementById('bannerClose');
       if (banner && closeBtn) {
@@ -861,21 +648,38 @@ export async function onRequest(context) {
         } catch(e) {}
       }
 
-      // Auto-try deep link on mobile
-      var ua = navigator.userAgent || '';
-      var isMobile = /iPhone|iPad|iPod|Android/i.test(ua);
-      if (isMobile) {
-        var deepLink = ${JSON.stringify(deepLink)};
-        var timeout;
-        // Try opening the app silently
-        var start = Date.now();
-        window.location.href = deepLink;
-        timeout = setTimeout(function(){
-          // If we're still here after 1.5s, app wasn't installed
-          if (Date.now() - start < 2000) {
-            // Don't redirect, user stays on page
+      // --- Smart open: try the app, fall back to the store ---
+      // Only on user tap (no auto-redirect on load: that shows an ugly
+      // "address invalid" alert on iOS for users without the app).
+      function smartOpen(e) {
+        e.preventDefault();
+        var fellBack = false;
+        var onHide = function() { fellBack = true; };
+        document.addEventListener('visibilitychange', onHide, { once: true });
+
+        window.location.href = DEEP_LINK;
+
+        setTimeout(function() {
+          document.removeEventListener('visibilitychange', onHide);
+          // Still visible after 1.4s → app not installed → go to store
+          if (!fellBack && !document.hidden && STORE_URL) {
+            window.location.href = STORE_URL;
           }
-        }, 1500);
+        }, 1400);
+      }
+
+      ['topOpenBtn', 'mainOpenBtn', 'floatOpenBtn'].forEach(function(btnId){
+        var el = document.getElementById(btnId);
+        if (el) el.addEventListener('click', smartOpen);
+      });
+
+      // --- NSFW / spoiler reveal ---
+      var revealBtn = document.getElementById('revealBtn');
+      var heroEl = document.getElementById('heroEl');
+      if (revealBtn && heroEl) {
+        revealBtn.addEventListener('click', function(){
+          heroEl.classList.add('revealed');
+        });
       }
     })();
   </script>
@@ -896,6 +700,38 @@ function text(msg, status = 200) {
   return new Response(String(msg), {
     status,
     headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+  });
+}
+
+function notFoundPage(appName, siteUrl, webUrl) {
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#0E141D" />
+  <title>Post not found — ${escapeHtml(appName)}</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0E141D; color: #F2F5F9; min-height: 100vh; margin: 0;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 14px; padding: 24px; text-align: center; }
+    h1 { font-size: 22px; letter-spacing: -0.02em; }
+    p { color: rgba(148,161,178,0.8); font-size: 14px; max-width: 320px; line-height: 1.5; }
+    a { display: inline-flex; margin-top: 8px; background: linear-gradient(135deg,#F25A1F,#FF7A3C);
+      color: #fff; text-decoration: none; font-weight: 800; padding: 12px 26px;
+      border-radius: 999px; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <h1>This post is no longer available</h1>
+  <p>It may have been removed by its author. Discover more aviation content on ${escapeHtml(appName)}.</p>
+  <a href="${escapeHtml(webUrl || siteUrl)}">Visit ${escapeHtml(appName)}</a>
+</body>
+</html>`;
+  return new Response(html, {
+    status: 404,
+    headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
   });
 }
 
@@ -927,33 +763,51 @@ function pickHero(post, siteUrl) {
   const thumbUrl = pickFirstHttp(post.thumbnail_url);
 
   if (mediaType === "video" && mediaUrl) {
-    return { type: "video", url: mediaUrl, poster: thumbUrl || `${siteUrl}/og-default.png` };
+    return { type: "video", url: mediaUrl, poster: thumbUrl || "" };
   }
   if (mediaType === "image" && mediaUrl) {
     return { type: "image", url: mediaUrl, poster: mediaUrl };
   }
   if (thumbUrl) return { type: "image", url: thumbUrl, poster: thumbUrl };
 
-  return { type: "image", url: `${siteUrl}/og-default.png`, poster: `${siteUrl}/og-default.png` };
+  return { type: "none", url: "", poster: "" };
 }
 
-function renderHero(type, url, poster, mediaType) {
-  const badge = mediaType ? `<div class="hero-badge">${escapeHtml(String(mediaType))}</div>` : "";
+function renderHero(hero, mediaType, isNsfw, isSpoiler) {
+  if (hero.type === "none") return "";
 
-  if (type === "video") {
+  const sensitive = isNsfw || isSpoiler;
+  const sensitiveLabel = isNsfw ? "NSFW content" : "Spoiler";
+  const heroClass = sensitive ? "hero sensitive" : "hero";
+
+  const overlay = sensitive
+    ? `<div class="sensitiveOverlay">
+        <div class="sensitiveLabel">${escapeHtml(sensitiveLabel)}</div>
+        <button class="revealBtn" id="revealBtn" type="button">Reveal</button>
+      </div>`
+    : "";
+
+  const badge =
+    hero.type === "video"
+      ? `<div class="hero-badge">Video</div>`
+      : "";
+
+  if (hero.type === "video") {
+    // No preload/controls until revealed for sensitive content
     return `
-      <div class="hero">
+      <div class="${heroClass}" id="heroEl">
         <video controls playsinline webkit-playsinline preload="metadata"
-          poster="${escapeHtml(poster)}" src="${escapeHtml(url)}"></video>
-        <div class="hero-hud"><div class="hero-hud-inner"></div></div>
+          ${hero.poster ? `poster="${escapeHtml(hero.poster)}"` : ""}
+          src="${escapeHtml(hero.url)}"></video>
         ${badge}
+        ${overlay}
       </div>`;
   }
   return `
-    <div class="hero">
-      <img src="${escapeHtml(url)}" alt="Post media" loading="eager" />
-      <div class="hero-hud"><div class="hero-hud-inner"></div></div>
+    <div class="${heroClass}" id="heroEl">
+      <img class="heroMedia" src="${escapeHtml(hero.url)}" alt="Post media" loading="eager" />
       ${badge}
+      ${overlay}
     </div>`;
 }
 
@@ -962,7 +816,9 @@ function buildDescription(body, isNsfw, isSpoiler) {
   if (isNsfw) tags.push("NSFW");
   if (isSpoiler) tags.push("Spoiler");
   const prefix = tags.length ? `[${tags.join(" · ")}] ` : "";
-  const t = body ? stripAndTrim(String(body), 160) : "Check out this post on Ozvion — The Aviation Community.";
+  const t = body
+    ? stripAndTrim(String(body), 160)
+    : "Join the aviation community — spotting, streams and more on Ozvion.";
   return prefix + t;
 }
 
@@ -983,6 +839,24 @@ function pickFirstHttp(v) {
   return s.startsWith("http://") || s.startsWith("https://") ? s : "";
 }
 
+function normalizeHandle(handle, fallbackName) {
+  // App shows communities as "o/elal" — mirror that here.
+  let h = safeText(handle);
+  if (!h) return `o/${fallbackName.toLowerCase().replace(/\s+/g, "")}`;
+  h = h.replace(/^\/+/, "");
+  return h.startsWith("o/") ? h : `o/${h}`;
+}
+
+function joinUrl(base, path) {
+  const p = safeText(path);
+  if (!p) return base;
+  return `${base}/${p.replace(/^\/+/, "")}`;
+}
+
+function svgDataUri(svg) {
+  return `data:image/svg+xml,${svg.replace(/#/g, "%23").replace(/"/g, "'")}`;
+}
+
 function escapeHtml(str) {
   return String(str)
     .replace(/&/g, "&amp;")
@@ -1000,16 +874,16 @@ function timeAgo(isoString) {
   const abs = Math.max(0, seconds);
 
   const units = [
-    ["year", 31536000],
-    ["month", 2592000],
-    ["day", 86400],
-    ["hour", 3600],
-    ["minute", 60],
+    ["y", 31536000],
+    ["mo", 2592000],
+    ["d", 86400],
+    ["h", 3600],
+    ["m", 60],
   ];
 
   for (const [name, secs] of units) {
     const v = Math.floor(abs / secs);
-    if (v >= 1) return `${v} ${name}${v === 1 ? "" : "s"} ago`;
+    if (v >= 1) return `${v}${name} ago`;
   }
   return "just now";
-}  
+}
